@@ -242,7 +242,7 @@ void loop()
 
         Serial.print(FormatStr("%s: %d.%02d\n"
                                "%s: %d.%02d\n"
-                               "%s: %d",
+                               "%s: %d\n",
                                CommProtocol::Input, FLOAT_ARGS(avgIntensity, 100),
                                CommProtocol::Seeing, FLOAT_ARGS(seeingArcSec, 100),
                                CommProtocol::Samples, sum.numSamples));
