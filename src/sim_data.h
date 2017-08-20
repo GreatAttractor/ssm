@@ -1,9 +1,20 @@
+/*
+ * Solar Scintillation Monitor firmware
+ * Copyright (c) 2017 Filip Szczerek <ga.software@yahoo.com>
+ *
+ * This project is licensed under the terms of the MIT license
+ * (see the LICENSE file for details).
+ *
+ *
+ * File description:
+ *
+ *     Seeing and average intensity data.
+ */
+
 #pragma once
 
 #include <avr/pgmspace.h>
 
-
-static uint16_t currentIdx = 0;
 
 namespace SimData
 {
@@ -2072,6 +2083,8 @@ static_assert(sizeof(Seeing) == sizeof(Input), "SimData::Input and SimData::Seei
 
 void GetNextSeeingAndInputVals(float &seeing, float &input)
 {
+    static uint16_t currentIdx = 0;
+
     uint8_t seeing8b = pgm_read_byte(Seeing + currentIdx),
             input8b  = pgm_read_byte(Input + currentIdx);
 

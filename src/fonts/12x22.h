@@ -1,3 +1,10 @@
+/*
+ *  12x22 font's glyph data in SH1106-friendly format.
+ *
+ *  Converted from iso01-12x22.psfu Linux font.
+ *
+ */
+
 #pragma once
 
 #include <avr/pgmspace.h>

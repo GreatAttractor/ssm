@@ -20,6 +20,11 @@
  * the "Timer Three" library is used to perform sampling over a specified duration (CALCULATION_PERIOD).
  *
  * Building tested with PlatformIO framework (platformio.org).
+ *
+ *
+ * File description:
+ *
+ *     Main program file.
  */
 
 // If set to 1, pre-recorded seeing and input level values are used (no need to connect the photodiode)

@@ -1,3 +1,16 @@
+/*
+ * Solar Scintillation Monitor firmware
+ * Copyright (c) 2017 Filip Szczerek <ga.software@yahoo.com>
+ *
+ * This project is licensed under the terms of the MIT license
+ * (see the LICENSE file for details).
+ *
+ *
+ * File description:
+ *
+ *     4x6 font's glyph data in SH1106-friendly format.
+ */
+
 #pragma once
 
 #include <avr/pgmspace.h>
