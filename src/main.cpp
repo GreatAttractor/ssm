@@ -22,11 +22,23 @@
  * Building tested with PlatformIO framework (platformio.org).
  */
 
-#include <stdarg.h>
-#include <stdio.h>
+// If set to 1, pre-recorded seeing and input level values are used (no need to connect the photodiode)
+#define SENSOR_SIMULATION  1
 
 #include <LiquidCrystal.h>
 #include <TimerThree.h>
+
+#include "bar_meter.h"
+#include "btn_handler.h"
+#include "fonts/12x22.h"
+#include "fonts/4x6.h"
+#include "graph.h"
+#include "rotenc_handler.h"
+#include "SH1106.h"
+#include "str_utils.h"
+#if SENSOR_SIMULATION
+#include "sim_data.h"
+#endif
 
 
 // Literal operators to convert durations into microseconds
@@ -48,9 +60,11 @@ constexpr float AVG_INTENSITY_MAX = 1.2; ///< Maximal input voltage allowing see
 
 constexpr float SEEING_INVALID_VAL = 9.99; ///< Returned when the input voltage is too low or too high
 
-/// Max length of string that can be created by FormatStr
-constexpr int MAX_PRINTF_LENGTH = 64;
+/// Number of seeing values used for calculating the running average
+constexpr uint8_t AVG_COUNT = 30;
 
+/// Decimal separator used for displaying values on screen
+#define DEC_SEP ","
 
 class InterruptDisabler
 {
@@ -79,106 +93,33 @@ namespace CommProtocol
 
 } // namespace CommProtocol
 
-namespace LCD
-{
+// --------------------------------------- Globals ---------------------------------------
 
-// Set the values to reflect your LCD<->Arduino wiring
-namespace Pins
-{
-constexpr uint8_t RS = 12;
-constexpr uint8_t EN = 11;
-constexpr uint8_t D4 = 5;
-constexpr uint8_t D5 = 7;
-constexpr uint8_t D6 = 4;
-constexpr uint8_t D7 = 9;
-} // namespace LCD::Pins
-
-namespace Chars
-{
-    constexpr uint8_t omega = 1;
-    constexpr uint8_t phi   = 2;
-
-namespace Bitmaps
-{
-    uint8_t omega[8] =
-    {
-        B00000,
-        B00000,
-        B01010,
-        B10001,
-        B10101,
-        B10101,
-        B01010
-    };
-
-    uint8_t phi[8] =
-    {
-        B00100,
-        B00100,
-        B01110,
-        B10101,
-        B10101,
-        B01110,
-        B00100
-    };
-} // namespace LCD::Chars::Bitmaps
-
-} // namespace LCD::Chars
-
-} // namespace LCD
-
-LiquidCrystal lcd(LCD::Pins::RS, LCD::Pins::EN,
-                  LCD::Pins::D4,
-                  LCD::Pins::D5,
-                  LCD::Pins::D6,
-                  LCD::Pins::D7);
-
-volatile bool TimerTriggered = false;
-
+volatile bool timerTriggered = false;
 bool ledOn = false;
 
-/// Outputs 2 arguments (integer and fractional part) for FormatStr()
-/** To print n decimal places, specify fractWeight = 10^n, e.g.:
+BUTTON_HANDLER(KnobPress, 7, 20_ms)
+ROT_ENC_HANDLER(KnobRotate, 2, 3, 20_ms)
 
-      FormatStr("%01d.%02d", FLOAT_ARGS(12.234, 100));
+Display::SH1106 oled(10, 11, 12);
+uint8_t oledContrast = 0x80;
 
-    prints "12.23".
-*/
-#define FLOAT_ARGS(value, fractWeight)  (int)(value), (int)((value) * (fractWeight)) % (fractWeight)
-
-// Returns a formatted string created with snprintf()
-const char* FormatStr(const char* format, ...)
+const uint8_t bmpSun9x9[] PROGMEM =
 {
-    static char buf[MAX_PRINTF_LENGTH + 1];
+    0x10, 0x92, 0x54, 0x38, 0xFF, 0x38, 0x54, 0x92, 0x10,
+    0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
+};
 
-    va_list args;
+Graph graph(oled, AVG_COUNT/2,
+            /*make room for Y axis marks */Fonts::Font4x6.width + 2 + oled.GetFirstVisibleCol(),
+            oled.GetVisibleColCount());
 
-    va_start(args, format);
-    vsnprintf(buf, MAX_PRINTF_LENGTH + 1, format, args);
-    va_end(args);
-
-    return buf;
-}
-
-void setup()
+struct
 {
-    pinMode(LED_BUILTIN, OUTPUT);
-
-    lcd.begin(16, 2);
-
-    lcd.createChar(LCD::Chars::omega, LCD::Chars::Bitmaps::omega);
-    lcd.createChar(LCD::Chars::phi, LCD::Chars::Bitmaps::phi);
-
-    lcd.clear();
-    lcd.setCursor(0, 0); lcd.print("SSM init");
-    delay(1000);
-    lcd.clear();
-
-    Timer3.initialize(CALCULATION_PERIOD);
-    Timer3.attachInterrupt([]() { TimerTriggered = true; });
-
-    Serial.begin(115200);
-}
+    uint8_t seeing[AVG_COUNT] = { 0 }; // Seeing values 0.0"-10.0" scaled to 0-255
+    uint8_t nextPos = 0;
+    uint16_t sum = 0;
+} runningAvg;
 
 struct
 {
@@ -186,14 +127,98 @@ struct
     unsigned long numSamples;
 } sum;
 
+// ---------------------------------------------------------------------------------------
+
+
+void setup()
+{
+    pinMode(LED_BUILTIN, OUTPUT);
+
+    Timer3.initialize(CALCULATION_PERIOD);
+    Timer3.attachInterrupt([]() { timerTriggered = true; });
+
+    KnobPress::Init();
+    KnobRotate::Init();
+
+    Serial.begin(115200);
+
+    oled.Init(oledContrast);
+    oled.FillPattern(0x00);
+    // Y axis marks of the seeing graph
+    oled.DrawText(oled.GetFirstVisibleCol(), 64 - 1*40/3 - Fonts::Font4x6.height/2, "1", Fonts::Font4x6);
+    oled.DrawText(oled.GetFirstVisibleCol(), 64 - 2*40/3 - Fonts::Font4x6.height/2, "2", Fonts::Font4x6);
+
+    oled.DrawBitmap(84, 0, 9, 9, bmpSun9x9);
+}
+
+/// Shows info on screen
+void showInfo(float seeingArcSec, float avgIntensity)
+{
+    oled.DrawText(2, 0, FormatStr("%01d" DEC_SEP "%02d\"", FLOAT_ARGS(seeingArcSec, 100)), Fonts::Font12x22);
+
+    DrawMeter<8>(avgIntensity * 255/AVG_INTENSITY_MAX, 98, 0, oled);
+    oled.DrawText(128 + 2 - 4*6, 12, FormatStr("%d" DEC_SEP "%02d V", FLOAT_ARGS(avgIntensity, 100)), Fonts::Font4x6);
+
+    // Graph is 40 pixels high, max displayed value is 3.0"
+    uint8_t displayedAvg = runningAvg.sum/AVG_COUNT * 10.0f/255  * 40/3.0f;
+    graph.DrawValue(seeingArcSec * 40/3.0, displayedAvg);
+}
+
+/// Sends data to client over serial port
+void sendData(float seeingArcSec, float avgIntensity)
+{
+    Serial.print(FormatStr("%s: %d.%02d\n"
+                           "%s: %d.%02d\n"
+                           "%s: %d\n",
+                           CommProtocol::Input, FLOAT_ARGS(avgIntensity, 100),
+                           CommProtocol::Seeing, FLOAT_ARGS(seeingArcSec, 100),
+                           CommProtocol::Samples, sum.numSamples));
+}
+
 void loop()
 {
     bool wasTimerTriggered = false;
+    bool knobPressed = false;
+    bool knobRotated = false;
+    bool knobRotClockwise;
 
     { ATOMIC
 
-        wasTimerTriggered = TimerTriggered;
-        TimerTriggered = false;
+        wasTimerTriggered = timerTriggered;
+        timerTriggered = false;
+
+        if (KnobPress::pressed)
+        {
+            knobPressed = true;
+            KnobPress::pressed = false;
+        }
+
+        if (KnobRotate::flags.changed)
+        {
+            knobRotated = true;
+            knobRotClockwise = KnobRotate::flags.clockwise;
+            KnobRotate::flags.changed = false;
+        }
+    }
+
+    if (knobRotated)
+    {
+        if (knobRotClockwise)
+        {
+            if (oledContrast <= 0xFF - 0x10)
+                oledContrast += 0x10;
+            else
+                oledContrast = 0xFF;
+        }
+        else
+        {
+            if (oledContrast >= 0x10)
+                oledContrast -= 0x10;
+            else
+                oledContrast = 0x00;
+        }
+
+        oled.SetContrast(oledContrast);
     }
 
     if (wasTimerTriggered)
@@ -201,6 +226,8 @@ void loop()
         digitalWrite(LED_BUILTIN, ledOn ? HIGH : LOW);
         ledOn = !ledOn;
         wasTimerTriggered = false;
+
+#if !SENSOR_SIMULATION
 
         float avgIntensity = sum.intensity / sum.numSamples;
         const float rmsVaryingIntensity = sqrt(sum.varying / sum.numSamples);
@@ -231,30 +258,34 @@ void loop()
         if (avgIntensity < 0)
             avgIntensity = 0;
 
-        lcd.setCursor(0, 0);
-        if (seeingArcSec == SEEING_INVALID_VAL)
-            lcd.print(FormatStr("%c:----- I:%01d.%02dV", LCD::Chars::omega, FLOAT_ARGS(avgIntensity, 100)));
-        else
-            lcd.print(FormatStr("%c:%01d.%02d\" I:%01d.%02dV", LCD::Chars::omega, FLOAT_ARGS(seeingArcSec, 100), FLOAT_ARGS(avgIntensity, 100)));
+#else // SENSOR_SIMULATION
 
-        lcd.setCursor(0, 1);
-        lcd.print(FormatStr("samples: %5d", sum.numSamples));
+        float seeingArcSec, avgIntensity;
+        SimData::GetNextSeeingAndInputVals(seeingArcSec, avgIntensity);
 
-        Serial.print(FormatStr("%s: %d.%02d\n"
-                               "%s: %d.%02d\n"
-                               "%s: %d\n",
-                               CommProtocol::Input, FLOAT_ARGS(avgIntensity, 100),
-                               CommProtocol::Seeing, FLOAT_ARGS(seeingArcSec, 100),
-                               CommProtocol::Samples, sum.numSamples));
+#endif
+
+        runningAvg.seeing[runningAvg.nextPos] = seeingArcSec * 255 / 10.0f;
+        runningAvg.sum += runningAvg.seeing[runningAvg.nextPos];
+        runningAvg.sum -= runningAvg.seeing[(runningAvg.nextPos + 1) % AVG_COUNT];
+        runningAvg.nextPos = (runningAvg.nextPos + 1) % AVG_COUNT;
+
+        showInfo(seeingArcSec, avgIntensity);
+
+        sendData(seeingArcSec, avgIntensity);
 
         sum.intensity = 0;
         sum.varying = 0;
         sum.numSamples = 0;
     }
 
+#if !SENSOR_SIMULATION
+
     const float input = Normalize(analogRead(VARYING_INTENSITY_INPUT));
     sum.varying   += sq(input);
     sum.intensity += Normalize(analogRead(AVERAGE_INTENSITY_INPUT));
 
     sum.numSamples++;
+
+#endif
 }
