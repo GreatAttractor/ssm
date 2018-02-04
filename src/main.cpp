@@ -106,7 +106,7 @@ bool ledOn = false;
 BUTTON_HANDLER(KnobPress, 7, 20_ms)
 ROT_ENC_HANDLER(KnobRotate, 2, 3, 20_ms)
 
-Display::SH1106 oled(10, 11, 12);
+Display::SH1106 oled(10, 12, 11);
 uint8_t oledContrast = 0x80;
 
 const uint8_t bmpSun9x9[] PROGMEM =
